@@ -1,0 +1,8 @@
+# Normalise to LF in the repository regardless of the checkout platform.
+# This repo is authored on Windows and will be reviewed and run elsewhere.
+* text=auto eol=lf
+
+# Fixtures are compared byte for byte against a committed seed. A line ending
+# rewrite would change their hashes and break reproducibility.
+eval/fixtures/** -text
+eval/cache/** -text
