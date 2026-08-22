@@ -1,0 +1,22 @@
+{
+  "name": "reckon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A reconciliation agent whose product is knowing when to refuse.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "gen:dev": "node --experimental-strip-types eval/generator/cli.ts --split dev",
+    "gen:test": "node --experimental-strip-types eval/generator/cli.ts --split test",
+    "eval": "node --experimental-strip-types eval/run.ts --split dev",
+    "eval:test": "node --experimental-strip-types eval/run.ts --split test --once",
+    "report": "node --experimental-strip-types src/report/build.ts",
+    "capture:schemas": "node --experimental-strip-types scripts/capture-schemas.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.7.2"
+  }
+}

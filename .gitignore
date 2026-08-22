@@ -1,0 +1,19 @@
+# secrets: never commit
+.env
+.env.local
+.env.*.local
+*.pem
+
+# deps + build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# os
+.DS_Store
+Thumbs.db
+
+# NOT ignored on purpose:
+#   eval/cache/       committed so results reproduce with no API key
+#   eval/fixtures/    committed so the batch is byte identical for a reviewer
+#   report/index.html committed so a reviewer can open one file
