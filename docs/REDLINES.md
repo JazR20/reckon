@@ -5,8 +5,10 @@ payments a leak is not an embarrassment, it is a legal and financial event.
 
 ## What never appears in this repository
 
-1. **Credentials.** No API keys, tokens, secrets or `.env` values. `.env.local` is
-   gitignored. `.env.example` carries key names and empty values only.
+1. **Credentials.** No API keys, tokens, secrets or `.env` values. There is no committed
+   env file of any kind, not even a template with empty values, because this repository
+   requires no configuration to reproduce its published results. The two optional
+   developer variables are named in the README and nowhere else.
 2. **Live money identifiers.** No real payment ids, order ids, settlement ids or bank
    reference numbers. These are not secrets in a cryptographic sense, but they correlate
    to real money movement for anyone who reads them.
