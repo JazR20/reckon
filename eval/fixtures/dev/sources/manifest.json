@@ -1,0 +1,14 @@
+{
+  "merchant": "Saanjh Goods",
+  "gateway": "RAZORPAY SOFTWARE",
+  "currency": "INR",
+  "declaredRowCounts": {
+    "bank_statement": 404,
+    "settlements": 282,
+    "payments": 4596,
+    "refunds": 197,
+    "orders": 4590,
+    "fx_rates": 294
+  },
+  "note": "Row counts exclude the header. Ingest must verify these and refuse the run on a mismatch."
+}
