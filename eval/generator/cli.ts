@@ -7,7 +7,7 @@
  * Output is deterministic. Two runs on any machine produce byte identical files.
  */
 
-import { EMIT, FAULTS, SEEDS, type Split, WORLD, outDirFor } from "./config.ts";
+import { EMIT, SEEDS, type Split, faultsFor, outDirFor, worldFor } from "./config.ts";
 import { emitCorpus } from "./emit.ts";
 import { planCorruption } from "./faults.ts";
 import { Rng } from "./rng.ts";
@@ -17,8 +17,8 @@ import { buildWorld } from "./world.ts";
 function parseSplit(argv: readonly string[]): Split {
   const index = argv.indexOf("--split");
   const value = index >= 0 ? argv[index + 1] : undefined;
-  if (value !== "dev" && value !== "test") {
-    throw new Error("Usage: cli.ts --split dev|test");
+  if (value !== "dev" && value !== "test" && value !== "large") {
+    throw new Error("Usage: cli.ts --split dev|test|large");
   }
   return value;
 }
@@ -27,8 +27,8 @@ export async function generate(split: Split): Promise<void> {
   const seed = SEEDS[split];
   const root = new Rng(seed);
 
-  const world = buildWorld(root.fork("world"), WORLD);
-  const { corruption, truth } = planCorruption(root.fork("faults"), world, FAULTS);
+  const world = buildWorld(root.fork("world"), worldFor(split));
+  const { corruption, truth } = planCorruption(root.fork("faults"), world, faultsFor(split));
   const outDir = outDirFor(split);
   const { truth: emitted, counts } = await emitCorpus(
     outDir,
