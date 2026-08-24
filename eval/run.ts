@@ -136,10 +136,35 @@ function report(
   console.log(`  REVIEW                      ${review.length}  (${pct(review.length, total)})`);
   console.log(`  REFUSED                     ${refused.length}  (${pct(refused.length, total)})`);
   console.log();
+  // ---------------------------------------------------------------------
+  // A system that answers nothing scores perfectly on every ratio metric.
+  //
+  // Precision is undefined over zero matches, false matches are zero because there were
+  // no matches, and expected calibration error is 0.000 because there is nothing to
+  // calibrate. Printed plainly next to the word "perfect", that reads as a triumph.
+  //
+  // This was not hypothetical. A run on the large corpus produced exactly that page and it
+  // looked, at a glance, like the best result in the project. Refusing to render vacuous
+  // metrics is the same discipline the matcher applies to its own output: when there is no
+  // answer, say so, do not emit a number shaped like one.
+  // ---------------------------------------------------------------------
+  if (matched.length === 0) {
+    console.log();
+    console.log(`  !! NOTHING WAS AUTO MATCHED. Every ratio below would be vacuous.`);
+    console.log(`     Precision is undefined over zero decisions. A false match count of`);
+    console.log(`     zero means nothing was attempted, not that nothing was wrong. A`);
+    console.log(`     calibration error of zero means there was nothing to calibrate.`);
+    console.log(`     These are suppressed rather than printed as achievements.`);
+    console.log();
+    console.log(`     What IS meaningful here: ${refusedCorrectly} of ${shouldHaveRefused} unexplained credits were`);
+    console.log(`     refused, and ${review.length} rows were offered for review rather than guessed.`);
+    console.log();
+  } else {
   console.log(`  PRECISION on auto matched   ${pct(correctVE, matched.length)}   <- the number that matters`);
   console.log(`  false matches               ${falseMatches.length}`);
   console.log(`  coverage (auto decided)     ${pct(matched.length, total)}`);
   console.log(`  strict set accuracy         ${pct(correctStrict, matched.length)}  (identity, see ADR 0005)`);
+  }
   console.log();
   console.log(`  refusals that were correct  ${refusedCorrectly} of ${refused.length}`);
   console.log(`  rows that SHOULD be refused ${shouldHaveRefused}, of which caught ${refusedCorrectly}`);
@@ -246,6 +271,9 @@ function report(
   );
 
   console.log(`\n  CALIBRATION (stated confidence against observed correctness):`);
+  if (matched.length === 0) {
+    console.log(`    not reported: nothing was auto matched, so there is nothing to calibrate`);
+  } else {
   const buckets = [
     [0.0, 0.5],
     [0.5, 0.6],
@@ -267,6 +295,7 @@ function report(
     );
   }
   console.log(`    expected calibration error: ${ece.toFixed(3)}   (0 is perfect)`);
+  }
 
   console.log(`\n  SECTION 6.1 CHECKPOINT`);
   const coverage = (matched.length / total) * 100;
