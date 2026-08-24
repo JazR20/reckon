@@ -1,56 +1,110 @@
 {
-  "fittedOn": "dev",
+  "fittedOn": "dev+large",
   "fittedAt": "2025-07-04",
   "minObservations": 1,
-  "pooled": 0.8242,
+  "pooled": 0.5828,
   "buckets": {
-    "p2|s1|r0": {
-      "key": "p2|s1|r0",
-      "n": 19,
-      "correct": 12,
-      "precision": 0.619
+    "p2|s1|r0|a2": {
+      "key": "p2|s1|r0|a2",
+      "n": 25,
+      "correct": 14,
+      "precision": 0.5556
     },
-    "p0|s1|r1": {
-      "key": "p0|s1|r1",
+    "p0|s1|r1|a0": {
+      "key": "p0|s1|r1|a0",
       "n": 19,
       "correct": 18,
       "precision": 0.9048
     },
-    "p0|s0|r1": {
-      "key": "p0|s0|r1",
+    "p0|s0|r1|a0": {
+      "key": "p0|s0|r1|a0",
       "n": 4,
       "correct": 4,
       "precision": 0.8333
     },
-    "p1|s1|r0": {
-      "key": "p1|s1|r0",
-      "n": 31,
-      "correct": 26,
-      "precision": 0.8182
+    "p1|s1|r0|a0": {
+      "key": "p1|s1|r0|a0",
+      "n": 17,
+      "correct": 15,
+      "precision": 0.8421
     },
-    "p2|s0|r0": {
-      "key": "p2|s0|r0",
+    "p2|s1|r0|a1": {
+      "key": "p2|s1|r0|a1",
+      "n": 28,
+      "correct": 7,
+      "precision": 0.2667
+    },
+    "p1|s1|r0|a1": {
+      "key": "p1|s1|r0|a1",
+      "n": 23,
+      "correct": 12,
+      "precision": 0.52
+    },
+    "p2|s0|r0|a2": {
+      "key": "p2|s0|r0|a2",
+      "n": 1,
+      "correct": 1,
+      "precision": 0.6667
+    },
+    "p1|s0|r0|a2": {
+      "key": "p1|s0|r0|a2",
+      "n": 1,
+      "correct": 1,
+      "precision": 0.6667
+    },
+    "p3|s0|r0|a1": {
+      "key": "p3|s0|r0|a1",
+      "n": 2,
+      "correct": 1,
+      "precision": 0.5
+    },
+    "p3|s1|r0|a1": {
+      "key": "p3|s1|r0|a1",
       "n": 3,
+      "correct": 1,
+      "precision": 0.4
+    },
+    "p2|s1|r0|a0": {
+      "key": "p2|s1|r0|a0",
+      "n": 14,
       "correct": 2,
-      "precision": 0.6
+      "precision": 0.1875
     },
-    "p1|s0|r0": {
-      "key": "p1|s0|r0",
-      "n": 5,
-      "correct": 5,
-      "precision": 0.8571
+    "p3|s1|r0|a2": {
+      "key": "p3|s1|r0|a2",
+      "n": 14,
+      "correct": 8,
+      "precision": 0.5625
     },
-    "p3|s0|r0": {
-      "key": "p3|s0|r0",
+    "p1|s1|r0|a2": {
+      "key": "p1|s1|r0|a2",
+      "n": 4,
+      "correct": 4,
+      "precision": 0.8333
+    },
+    "p1|s0|r0|a1": {
+      "key": "p1|s0|r0|a1",
       "n": 3,
-      "correct": 2,
-      "precision": 0.6
+      "correct": 3,
+      "precision": 0.8
     },
-    "p3|s1|r0": {
-      "key": "p3|s1|r0",
-      "n": 5,
-      "correct": 5,
-      "precision": 0.8571
+    "p2|s0|r0|a0": {
+      "key": "p2|s0|r0|a0",
+      "n": 1,
+      "correct": 1,
+      "precision": 0.6667
+    },
+    "p3|s0|r0|a0": {
+      "key": "p3|s0|r0|a0",
+      "n": 1,
+      "correct": 1,
+      "precision": 0.6667
+    },
+    "p1|s0|r0|a0": {
+      "key": "p1|s0|r0|a0",
+      "n": 1,
+      "correct": 1,
+      "precision": 0.6667
     }
   },
   "note": "Fitted on the dev split only. Never fitted on test. Precision figures carry Laplace smoothing so a small bucket cannot claim certainty. Regenerate with npm run fit."

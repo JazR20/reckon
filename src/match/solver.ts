@@ -122,6 +122,23 @@ export interface Solution {
    * solver quietly fell through to an all-rupee alternative on the same day.
    */
   readonly batchDayHasConversion: boolean;
+  /**
+   * Members that could have been a different payment.
+   *
+   * A member drawn from a bucket that still held others is interchangeable: an
+   * amount identical payment captured the same day was left behind, and nothing in the
+   * sources says which of them belongs here.
+   *
+   * This exists because a confidence table fitted on the dev corpus did not transfer to a
+   * four times denser one. Dev buckets measured at 90 percent precision scored 40 percent
+   * at scale. The cause is that identical evidence means something different when
+   * interchangeability is 56 percent rather than 23: the same perturbation, on the same
+   * kind of reference, is a far weaker claim in a dense book.
+   *
+   * Counting the ambiguity a solution actually faced, rather than inferring it from the
+   * corpus it came from, is what lets one fitted table hold across densities.
+   */
+  readonly interchangeableMembers: number;
 }
 
 export interface SolveResult {
@@ -219,6 +236,21 @@ function materialise(buckets: readonly Bucket[], counts: Counts): ValuedPayment[
     if (n > 0) out.push(...(buckets[i] as Bucket).members.slice(0, n));
   }
   return out;
+}
+
+/**
+ * Members taken from a bucket that still held others. Each is a coin flip the sources do
+ * not decide, so each is a reason to trust the answer less.
+ */
+function countInterchangeable(buckets: readonly Bucket[], counts: Counts): number {
+  let total = 0;
+  for (let i = 0; i < counts.length; i++) {
+    const taken = counts[i] as number;
+    if (taken <= 0) continue;
+    const stock = (buckets[i] as Bucket).members.length;
+    if (stock > taken) total += taken;
+  }
+  return total;
 }
 
 function grossOf(buckets: readonly Bucket[], counts: Counts): bigint {
@@ -353,8 +385,10 @@ export interface SolveCache {
   readonly available: Map<string, ValuedPayment[]>;
   /** buckets for a single day */
   readonly buckets: Map<string, Bucket[]>;
-  /** buckets for the straggler window behind a batch day, the real hot spot */
+  /** buckets for the straggler window behind a batch day */
   readonly stragglerBuckets: Map<string, Bucket[]>;
+  /** every reachable addition sum for a batch day, indexed. See addIndexFor */
+  readonly addIndex: Map<string, AddIndex>;
   readonly excluded: Set<string>;
   /**
    * Batch days already claimed by a committed credit.
@@ -383,6 +417,7 @@ export function buildCache(pool: readonly ValuedPayment[]): SolveCache {
     available: new Map(),
     buckets: new Map(),
     stragglerBuckets: new Map(),
+    addIndex: new Map(),
     excluded: new Set(),
     claimedDays: new Set(),
     dirtyDays: new Set(),
@@ -418,6 +453,7 @@ export function excludeFromCache(
   // a straggler window spans several days, so any cached window overlapping a dirty day
   // is stale. Clearing the whole window map is cheaper than tracking the overlap.
   cache.stragglerBuckets.clear();
+  cache.addIndex.clear();
 }
 
 function bucketsFor(cache: SolveCache, day: string): Bucket[] {
@@ -436,6 +472,94 @@ function availableOn(cache: SolveCache, day: string): ValuedPayment[] {
     cache.excluded.size === 0 ? source : source.filter((m) => !cache.excluded.has(m.payment.id));
   cache.available.set(day, built);
   return built;
+}
+
+/**
+ * Every addition a batch day can supply, indexed by the value it adds.
+ *
+ * THE SCALING FIX. The inner search asks the same question once per removal vector: which
+ * subsets of the straggler pool sum to this value? That question depends only on the batch
+ * day, not on which payments were removed from the base, yet a depth first search was
+ * being rerun for every one of roughly 286 removal vectors, on every candidate day, for
+ * every row.
+ *
+ * On the dev corpus that is wasteful. On the large corpus it does not finish: a denser day
+ * means more stock per bucket, which multiplies both the removal vectors and the paths
+ * through each search.
+ *
+ * So it is enumerated once per batch day and cached. Lookups are then a hash hit for an
+ * exact target, or a binary search over sorted sums for a range.
+ *
+ * The enumeration is bounded and small because the merchant sells a fixed catalogue: a
+ * handful of distinct amounts across a handful of days, taken at most maxAdd at a time.
+ */
+interface AddIndex {
+  readonly buckets: Bucket[];
+  readonly bySum: Map<string, Counts[]>;
+  readonly sorted: bigint[];
+}
+
+function addIndexFor(
+  cache: SolveCache,
+  batchDay: string,
+  lookback: number,
+  maxAdd: number,
+): AddIndex {
+  const hit = cache.addIndex.get(batchDay);
+  if (hit) return hit;
+
+  const buckets = stragglerBucketsFor(cache, batchDay, lookback);
+  const bySum = new Map<string, Counts[]>();
+  const counts: Counts = new Array<number>(buckets.length).fill(0);
+
+  const record = (sum: bigint): void => {
+    const key = sum.toString();
+    const list = bySum.get(key);
+    if (list) {
+      if (list.length < 8) list.push([...counts]);
+    } else {
+      bySum.set(key, [[...counts]]);
+    }
+  };
+
+  const recurse = (index: number, running: bigint, taken: number): void => {
+    record(running);
+    if (index >= buckets.length || taken >= maxAdd) return;
+    const bucket = buckets[index] as Bucket;
+    const capacity = Math.min(bucket.members.length, maxAdd - taken);
+    for (let take = capacity; take >= 1; take--) {
+      counts[index] = take;
+      recurse(index + 1, running + bucket.minor * BigInt(take), taken + take);
+      counts[index] = 0;
+    }
+    recurse(index + 1, running, taken);
+  };
+  recurse(0, 0n, 0);
+
+  const sorted = [...bySum.keys()].map((k) => BigInt(k)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const built: AddIndex = { buckets, bySum, sorted };
+  cache.addIndex.set(batchDay, built);
+  return built;
+}
+
+/** Count vectors whose value lands in [low, high], via the cached index. */
+function additionsInRange(index: AddIndex, low: bigint, high: bigint, limit: number): Counts[] {
+  if (low === high) return index.bySum.get(low.toString()) ?? [];
+  const out: Counts[] = [];
+  let lo = 0;
+  let hi = index.sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((index.sorted[mid] as bigint) < low) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo; i < index.sorted.length; i++) {
+    const value = index.sorted[i] as bigint;
+    if (value > high) break;
+    out.push(...(index.bySum.get(value.toString()) ?? []));
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 function stragglerBucketsFor(cache: SolveCache, batchDay: string, lookback: number): Bucket[] {
@@ -486,7 +610,8 @@ export function solve(
     if (base.some((m) => !m.resolvable)) continue;
 
     const baseBuckets = bucketsFor(cache, batchDay);
-    const addBuckets = stragglerBucketsFor(cache, batchDay, options.stragglerLookback);
+    const index = addIndexFor(cache, batchDay, options.stragglerLookback, options.maxAdd);
+    const addBuckets = index.buckets;
     const baseGross = base.reduce((acc, m) => acc + m.gross.minor, 0n);
 
     for (let removeTotal = 0; removeTotal <= options.maxRemove; removeTotal++) {
@@ -508,9 +633,16 @@ export function solve(
 
         const addBudget = Math.min(
           options.maxAdd,
-          Math.max(0, (Number.isFinite(bestPerturbation) ? bestPerturbation : options.maxAdd + removeTotal) - removeTotal),
+          Math.max(
+            0,
+            (Number.isFinite(bestPerturbation) ? bestPerturbation : options.maxAdd + removeTotal) -
+              removeTotal,
+          ),
         );
-        const additions = countVectorsSummingInto(addBuckets, low, high, addBudget, 24, counter);
+        counter.nodes++;
+        const additions = additionsInRange(index, low, high, 24).filter(
+          (c) => c.reduce((a, b) => a + b, 0) <= addBudget,
+        );
 
         for (const addCounts of additions) {
           const addedTotal = addCounts.reduce((a, b) => a + b, 0);
@@ -534,6 +666,9 @@ export function solve(
               removed: removeTotal,
               added: addedTotal,
               approximateMembers: members.filter((m) => m.approximate).length,
+              interchangeableMembers:
+                countInterchangeable(baseBuckets, keptCounts) +
+                countInterchangeable(addBuckets, addCounts),
               batchDayHasConversion: (cache.byDay.get(batchDay) ?? []).some((m) => m.approximate),
             });
           }

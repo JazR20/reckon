@@ -18,29 +18,48 @@ import { DEFAULT_RUN, runDeterministic } from "../src/match/pipeline.ts";
 import { fitCalibration, type Features } from "../src/match/confidence.ts";
 import { canonicalForm, type PaymentFacts } from "./scoring/equivalence.ts";
 
-const SPLIT = "dev";
-const dir = `eval/fixtures/${SPLIT}`;
+/**
+ * Fitted across dev AND large, both training corpora. The test split is never touched.
+ *
+ * Two reasons, both measured.
+ *
+ * A table fitted on dev alone did not transfer: dev buckets measuring 90 percent precision
+ * scored 40 percent on a four times denser corpus. Adding the interchangeability feature
+ * addresses the cause, but a feature that distinguishes densities is worthless if it is
+ * only ever shown one density.
+ *
+ * And the finer feature set partitions 89 dev observations into buckets of one and two,
+ * which is a model too fine for the data behind it. The answer to that is more
+ * observations, not a coarser model that hides the ambiguity it was built to see.
+ */
+const SPLITS = ["dev", "large"] as const;
 
-const sources = await ingest(join(dir, "sources"));
-const truth = JSON.parse(await readFile(join(dir, "truth.json"), "utf8")) as {
-  entries: { row: number; paymentIds: string[]; duplicateOfRow: number | null }[];
-};
-const truthByRow = new Map(truth.entries.map((e) => [e.row, e] as const));
+const observations: { features: Features; correct: boolean }[] = [];
+let firstDate = "unknown";
 
-const factsById = new Map<string, PaymentFacts>();
-for (const p of sources.payments) {
-  factsById.set(p.id, {
-    id: p.id,
-    captureDate: p.capturedAt,
-    currency: p.amount.currency,
-    minor: p.amount.minor,
-  });
-}
-const facts = (ids: readonly string[]): PaymentFacts[] =>
-  ids.flatMap((id) => {
-    const f = factsById.get(id);
-    return f ? [f] : [];
-  });
+for (const SPLIT of SPLITS) {
+  const dir = `eval/fixtures/${SPLIT}`;
+  const sources = await ingest(join(dir, "sources"));
+  const truth = JSON.parse(await readFile(join(dir, "truth.json"), "utf8")) as {
+    entries: { row: number; paymentIds: string[]; duplicateOfRow: number | null }[];
+  };
+  const truthByRow = new Map(truth.entries.map((e) => [e.row, e] as const));
+
+  const factsById = new Map<string, PaymentFacts>();
+  for (const p of sources.payments) {
+    factsById.set(p.id, {
+      id: p.id,
+      captureDate: p.capturedAt,
+      currency: p.amount.currency,
+      minor: p.amount.minor,
+    });
+  }
+  const facts = (ids: readonly string[]): PaymentFacts[] =>
+    ids.flatMap((id) => {
+      const f = factsById.get(id);
+      return f ? [f] : [];
+    });
+  if (firstDate === "unknown") firstDate = sources.bank[0]?.date ?? "unknown";
 
 // Fitted from an UNGATED run, deliberately.
 //
@@ -49,30 +68,34 @@ const facts = (ids: readonly string[]): PaymentFacts[] =>
 // own output and the two would chase each other. So the gate is opened fully here, every
 // candidate the solver produces is scored, and the table describes the solver rather than
 // the gate applied to it.
-const decisions = runDeterministic(sources, { ...DEFAULT_RUN, minConfidence: 0 });
-const observations: { features: Features; correct: boolean }[] = [];
-for (const decision of decisions) {
-  if (decision.verdict !== "MATCHED") continue;
-  const entry = truthByRow.get(decision.row);
-  if (!entry || entry.duplicateOfRow !== null) continue;
-  observations.push({
-    features: {
-      perturbation: decision.perturbation,
-      settlementPresent: decision.settlementId !== null,
-      firstRound: decision.round <= 1,
-    },
-    correct: canonicalForm(facts(decision.paymentIds)) === canonicalForm(facts(entry.paymentIds)),
-  });
+  const decisions = runDeterministic(sources, { ...DEFAULT_RUN, minConfidence: 0 });
+  let n = 0;
+  for (const decision of decisions) {
+    if (decision.verdict !== "MATCHED") continue;
+    const entry = truthByRow.get(decision.row);
+    if (!entry || entry.duplicateOfRow !== null) continue;
+    observations.push({
+      features: {
+        perturbation: decision.perturbation,
+        settlementPresent: decision.settlementId !== null,
+        firstRound: decision.round <= 1,
+        interchangeable: decision.interchangeable,
+      },
+      correct: canonicalForm(facts(decision.paymentIds)) === canonicalForm(facts(entry.paymentIds)),
+    });
+    n++;
+  }
+  console.log(`  ${SPLIT}: ${n} auto matched rows scored`);
 }
 
 const table = fitCalibration(observations, {
-  fittedOn: SPLIT,
-  fittedAt: sources.bank[0]?.date ?? "unknown",
+  fittedOn: SPLITS.join("+"),
+  fittedAt: firstDate,
   minObservations: 1,
 });
 
 await writeFile("src/match/calibration.json", JSON.stringify(table, null, 2) + "\n", "utf8");
-console.log(`\nfitted on ${observations.length} auto matched rows from ${SPLIT}`);
+console.log(`\nfitted on ${observations.length} auto matched rows from ${SPLITS.join(" + ")}`);
 console.log(`  pooled precision ${table.pooled}`);
 for (const bucket of Object.values(table.buckets).sort((a, b) => a.key.localeCompare(b.key))) {
   const trusted = bucket.n < 8 ? `  (n=${bucket.n}, smoothed toward 0.5)` : "";

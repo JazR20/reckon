@@ -31,6 +31,15 @@ export interface Features {
   readonly settlementPresent: boolean;
   /** committed in the first propagation round, or later after contests resolved */
   readonly firstRound: boolean;
+  /**
+   * Members of the answer that could have been a different payment.
+   *
+   * Banded rather than raw, because the distinction that matters is none, a few, or many.
+   * Added after a table fitted on the dev corpus failed to transfer to a denser one: the
+   * same perturbation on the same kind of reference is a much weaker claim in a book where
+   * more than half the payments have an identical twin.
+   */
+  readonly interchangeable: number;
 }
 
 export interface Bucket {
@@ -51,7 +60,8 @@ export interface CalibrationTable {
 
 export function featureKey(features: Features): string {
   const p = Math.min(features.perturbation, 3);
-  return `p${p}|s${features.settlementPresent ? 1 : 0}|r${features.firstRound ? 1 : 0}`;
+  const band = features.interchangeable === 0 ? 0 : features.interchangeable <= 2 ? 1 : 2;
+  return `p${p}|s${features.settlementPresent ? 1 : 0}|r${features.firstRound ? 1 : 0}|a${band}`;
 }
 
 let cached: CalibrationTable | null = null;
