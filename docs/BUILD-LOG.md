@@ -331,3 +331,54 @@ percent** and the strict ceiling falls from 40 to **20.4**, because same day amo
 collisions scale superlinearly with daily volume. A denser business is a genuinely harder
 reconciliation, not merely a longer one, and any system reporting a flat accuracy across
 volumes is not measuring that.
+
+### The transfer test, and a feature that measured the wrong ambiguity
+
+Running the large corpus with a table fitted on dev produced the sharpest result of the
+week: **buckets dev measured at 90 percent precision scored 40 percent**, and coverage fell
+to 0.7 percent.
+
+That is what a distribution shift test is for. Interchangeability is 23 percent on dev and
+56.3 percent on the large corpus, so the same perturbation on the same kind of reference is
+a much weaker claim in a dense book. Nothing in the feature set could see that, so one
+confidence number was quietly meaning two different things.
+
+A feature was added to count the ambiguity a solution actually faced. **It was wrong, and
+the way it was wrong is the useful part.**
+
+The first definition counted members drawn from a bucket that still held others. A bucket
+is `(day, amount)`. Swapping two identical payments captured on the SAME day produces an
+identical canonical form: it is precisely the harmless ambiguity `ADR 0005` exists to
+discard. The feature was measuring the ambiguity that does not matter.
+
+The consequence was visible immediately and only at scale. On the large corpus, where more
+than half of all payments have a same day twin, every candidate looked ambiguous and the
+gate refused all of them: **0 matched out of 1,471**. Precision was undefined, ECE was a
+meaningless 0.000, and a reader glancing at the report could have mistaken a system that
+answers nothing for a system that never errs.
+
+The substitution that actually changes an answer is cross day. Three payments of 999 taken
+from Monday, when the truth took two from Monday and one from Sunday, is a different
+multiset of `(day, amount)` and therefore a different answer. The feature now counts
+members whose amount was also available on another day in the candidate window, and same
+day duplicates are deliberately excluded.
+
+Two things held throughout, and both are worth more than the coverage figure:
+
+- **Orphan recall stayed at 200 of 200** on a corpus of 51,193 payments, through every
+  version of this. An unexplained bank credit is the highest value output the system has
+  and it was never once traded away for coverage.
+- **No false match was ever produced at scale.** Every version of the gate has preferred
+  saying nothing to saying something wrong.
+
+### The index earned its place, and the cost is recorded
+
+Caching the addition sum index per batch day made the dev corpus SLOWER, 5.9 seconds to
+10.5, because dev has little reuse to amortise the setup over. It was kept only after
+measuring the case it was built for: the large corpus went **457 seconds to 167, a 2.7x
+improvement**, and later to 71 seconds once the gate began refusing early.
+
+Batch day exclusivity, added in the same session, was measured on its own and **changed
+nothing**. The offset 0 errors are lower perturbation wrong subsets on the correct day, not
+day collisions. It is kept because it is a true constraint that will bind at other volumes,
+and recorded as having earned nothing here rather than left to imply otherwise.
