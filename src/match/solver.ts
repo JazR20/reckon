@@ -75,18 +75,29 @@ export interface SolveOptions {
 }
 
 /**
- * Bounds chosen from measurement, not from taste.
+ * Bounds chosen from measurement, and then deliberately tightened below what coverage
+ * alone would want.
  *
- * Against the dev corpus the true answers need at most 5 removals in 97.1 percent of
- * cases and at most 5 additions in 98.1 percent. A batch day tolerance of 4 covers 96
- * percent of offsets; the residue is bank holidays, which are deliberately not modelled.
+ * The true answers need up to 5 removals to be reachable at all, and a first pass used 5.
+ * Two measurements argued it back down to 3.
+ *
+ * Precision by perturbation: 92.3 percent at zero, 81.5 at one, 61.1 at two, 40.0 at
+ * three, 0.0 at five. Everything found beyond three is worse than a coin flip, so
+ * searching for it buys wrong answers.
+ *
+ * Cost: removal vectors grow combinatorially. At 5 over eight buckets the search did not
+ * finish a 399 row corpus inside two minutes; at 3 it is a fraction of the work.
+ *
+ * Faster and more accurate at once, because the expensive part and the inaccurate part
+ * were the same part. What is given up is reachability of the tail, and the honest
+ * consequence is that those rows go to review rather than to a confident wrong answer.
  */
 export const DEFAULT_SOLVE: SolveOptions = {
-  maxRemove: 5,
-  maxAdd: 5,
+  maxRemove: 3,
+  maxAdd: 3,
   settlementLagWorkingDays: 2,
-  batchDayTolerance: 4,
-  stragglerLookback: 6,
+  batchDayTolerance: 3,
+  stragglerLookback: 5,
   solutionLimit: 3,
 };
 
@@ -101,6 +112,16 @@ export interface Solution {
   readonly added: number;
   /** members whose value is a conversion, so the tie is approximate rather than exact */
   readonly approximateMembers: number;
+  /**
+   * True when the day this solution was drawn from contains a payment whose rupee value
+   * is a conversion.
+   *
+   * Scoped to the SOLUTION's day, not the anchor day. An earlier version checked only the
+   * anchor and missed three false matches whose true batch sat at offset +1 or +2: the
+   * true batch contained a converted payment and so could never tie exactly, and the
+   * solver quietly fell through to an all-rupee alternative on the same day.
+   */
+  readonly batchDayHasConversion: boolean;
 }
 
 export interface SolveResult {
@@ -318,22 +339,128 @@ function countVectorsOfExactSize(
 // the solve
 // ---------------------------------------------------------------------------
 
-export function solve(
-  creditDate: string,
-  mode: SolveMode,
-  pool: readonly ValuedPayment[],
-  options: SolveOptions = DEFAULT_SOLVE,
-): SolveResult {
-  const currency = mode.target.currency;
-  const counter = { nodes: 0 };
-  const byCanonical = new Map<string, Solution>();
+/**
+ * Buckets are computed once per day and reused across every row that considers that day.
+ *
+ * Without this the same day is re-bucketised for every credit that could plausibly draw
+ * from it, which on a year of data is thousands of redundant passes. Throughput is a
+ * reported metric, and rebuilding an immutable structure inside the hot loop is the
+ * cheapest possible thing to stop doing.
+ */
+export interface SolveCache {
+  readonly byDay: Map<string, ValuedPayment[]>;
+  /** available payments on a day, after exclusions */
+  readonly available: Map<string, ValuedPayment[]>;
+  /** buckets for a single day */
+  readonly buckets: Map<string, Bucket[]>;
+  /** buckets for the straggler window behind a batch day, the real hot spot */
+  readonly stragglerBuckets: Map<string, Bucket[]>;
+  readonly excluded: Set<string>;
+  /**
+   * Batch days already claimed by a committed credit.
+   *
+   * A gateway produces one settlement per batch day, so two credits cannot both be that
+   * day's payout. This is a stronger constraint than payment exclusivity and it targets
+   * the measured weakness directly: weekend captures settle alongside Friday's, so a
+   * Tuesday statement carries up to three credits competing for three batch days. Solving
+   * them independently let each prefer the nearest day, and offset 0 measured 54.2 percent
+   * precision against 90 and 100 percent at offsets 1 and 2.
+   */
+  readonly claimedDays: Set<string>;
+  /** days touched by the most recent exclusion, so unaffected rows need not re-solve */
+  dirtyDays: Set<string>;
+}
 
+export function buildCache(pool: readonly ValuedPayment[]): SolveCache {
   const byDay = new Map<string, ValuedPayment[]>();
   for (const valued of pool) {
     const bucket = byDay.get(valued.payment.capturedAt);
     if (bucket) bucket.push(valued);
     else byDay.set(valued.payment.capturedAt, [valued]);
   }
+  return {
+    byDay,
+    available: new Map(),
+    buckets: new Map(),
+    stragglerBuckets: new Map(),
+    excluded: new Set(),
+    claimedDays: new Set(),
+    dirtyDays: new Set(),
+  };
+}
+
+/** Days whose contents changed since the last call, for skipping unaffected rows. */
+export function dirtyDaysOf(cache: SolveCache): ReadonlySet<string> {
+  return cache.dirtyDays;
+}
+
+export function clearDirty(cache: SolveCache): void {
+  cache.dirtyDays = new Set();
+}
+
+/** Payments already committed to another credit are no longer available to this one. */
+/** Mark a batch day as spoken for. No other credit may be explained by it. */
+export function claimBatchDay(cache: SolveCache, day: string): void {
+  cache.claimedDays.add(day);
+  cache.dirtyDays.add(day);
+}
+
+export function excludeFromCache(
+  cache: SolveCache,
+  payments: Iterable<{ id: string; day: string }>,
+): void {
+  for (const { id, day } of payments) {
+    cache.excluded.add(id);
+    cache.dirtyDays.add(day);
+    cache.available.delete(day);
+    cache.buckets.delete(day);
+  }
+  // a straggler window spans several days, so any cached window overlapping a dirty day
+  // is stale. Clearing the whole window map is cheaper than tracking the overlap.
+  cache.stragglerBuckets.clear();
+}
+
+function bucketsFor(cache: SolveCache, day: string): Bucket[] {
+  const hit = cache.buckets.get(day);
+  if (hit) return hit;
+  const built = bucketise(availableOn(cache, day));
+  cache.buckets.set(day, built);
+  return built;
+}
+
+function availableOn(cache: SolveCache, day: string): ValuedPayment[] {
+  const hit = cache.available.get(day);
+  if (hit) return hit;
+  const source = cache.byDay.get(day) ?? [];
+  const built =
+    cache.excluded.size === 0 ? source : source.filter((m) => !cache.excluded.has(m.payment.id));
+  cache.available.set(day, built);
+  return built;
+}
+
+function stragglerBucketsFor(cache: SolveCache, batchDay: string, lookback: number): Bucket[] {
+  const hit = cache.stragglerBuckets.get(batchDay);
+  if (hit) return hit;
+  const members: ValuedPayment[] = [];
+  for (let s = 1; s <= lookback; s++) {
+    for (const m of availableOn(cache, addDays(batchDay, -s))) {
+      if (m.resolvable) members.push(m);
+    }
+  }
+  const built = bucketise(members);
+  cache.stragglerBuckets.set(batchDay, built);
+  return built;
+}
+
+export function solve(
+  creditDate: string,
+  mode: SolveMode,
+  cache: SolveCache,
+  options: SolveOptions = DEFAULT_SOLVE,
+): SolveResult {
+  const currency = mode.target.currency;
+  const counter = { nodes: 0 };
+  const byCanonical = new Map<string, Solution>();
 
   // The batch day is DERIVED, not searched for. Tolerance covers a bank holiday shifting
   // the cycle, weekend captures that settle alongside Friday's batch, and statement skew.
@@ -352,19 +479,14 @@ export function solve(
   let daysTried = 0;
 
   for (const batchDay of candidateDays) {
-    const base = byDay.get(batchDay);
-    if (!base || base.length === 0) continue;
+    if (cache.claimedDays.has(batchDay)) continue;
+    const base = availableOn(cache, batchDay);
+    if (base.length === 0) continue;
     daysTried++;
     if (base.some((m) => !m.resolvable)) continue;
 
-    const stragglers: ValuedPayment[] = [];
-    for (let s = 1; s <= options.stragglerLookback; s++) {
-      const day = byDay.get(addDays(batchDay, -s));
-      if (day) stragglers.push(...day.filter((m) => m.resolvable));
-    }
-
-    const baseBuckets = bucketise(base);
-    const addBuckets = bucketise(stragglers);
+    const baseBuckets = bucketsFor(cache, batchDay);
+    const addBuckets = stragglerBucketsFor(cache, batchDay, options.stragglerLookback);
     const baseGross = base.reduce((acc, m) => acc + m.gross.minor, 0n);
 
     for (let removeTotal = 0; removeTotal <= options.maxRemove; removeTotal++) {
@@ -412,6 +534,7 @@ export function solve(
               removed: removeTotal,
               added: addedTotal,
               approximateMembers: members.filter((m) => m.approximate).length,
+              batchDayHasConversion: (cache.byDay.get(batchDay) ?? []).some((m) => m.approximate),
             });
           }
           if (byCanonical.size > options.solutionLimit) break;

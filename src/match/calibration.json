@@ -1,0 +1,57 @@
+{
+  "fittedOn": "dev",
+  "fittedAt": "2025-07-04",
+  "minObservations": 1,
+  "pooled": 0.8242,
+  "buckets": {
+    "p2|s1|r0": {
+      "key": "p2|s1|r0",
+      "n": 19,
+      "correct": 12,
+      "precision": 0.619
+    },
+    "p0|s1|r1": {
+      "key": "p0|s1|r1",
+      "n": 19,
+      "correct": 18,
+      "precision": 0.9048
+    },
+    "p0|s0|r1": {
+      "key": "p0|s0|r1",
+      "n": 4,
+      "correct": 4,
+      "precision": 0.8333
+    },
+    "p1|s1|r0": {
+      "key": "p1|s1|r0",
+      "n": 31,
+      "correct": 26,
+      "precision": 0.8182
+    },
+    "p2|s0|r0": {
+      "key": "p2|s0|r0",
+      "n": 3,
+      "correct": 2,
+      "precision": 0.6
+    },
+    "p1|s0|r0": {
+      "key": "p1|s0|r0",
+      "n": 5,
+      "correct": 5,
+      "precision": 0.8571
+    },
+    "p3|s0|r0": {
+      "key": "p3|s0|r0",
+      "n": 3,
+      "correct": 2,
+      "precision": 0.6
+    },
+    "p3|s1|r0": {
+      "key": "p3|s1|r0",
+      "n": 5,
+      "correct": 5,
+      "precision": 0.8571
+    }
+  },
+  "note": "Fitted on the dev split only. Never fitted on test. Precision figures carry Laplace smoothing so a small bucket cannot claim certainty. Regenerate with npm run fit."
+}

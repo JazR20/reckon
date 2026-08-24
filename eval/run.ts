@@ -35,14 +35,18 @@ interface Scored {
   readonly shouldRefuse: boolean;
 }
 
-function parseArgs(argv: readonly string[]): { split: "dev" | "test"; once: boolean } {
+type Split = "dev" | "test" | "large";
+
+function parseArgs(argv: readonly string[]): { split: Split; once: boolean } {
   const at = argv.indexOf("--split");
   const value = at >= 0 ? argv[at + 1] : "dev";
-  if (value !== "dev" && value !== "test") throw new Error("--split must be dev or test");
+  if (value !== "dev" && value !== "test" && value !== "large") {
+    throw new Error("--split must be dev, test or large");
+  }
   return { split: value, once: argv.includes("--once") };
 }
 
-export async function run(split: "dev" | "test"): Promise<void> {
+export async function run(split: Split): Promise<void> {
   const dir = `eval/fixtures/${split}`;
   const started = Date.now();
 
@@ -146,7 +150,7 @@ function report(
 
   // per tier
   console.log(`\n  by deciding tier:`);
-  for (const tier of ["T0", "T1", "T2", "T6"] as const) {
+  for (const tier of ["T0", "T1", "T2", "T3", "T6"] as const) {
     const rows = scored.filter((s) => s.decision.tier === tier);
     if (rows.length === 0) continue;
     const m = rows.filter((s) => s.decision.verdict === "MATCHED");
@@ -213,6 +217,56 @@ function report(
       `    offset ${String(o).padStart(2)}  ${String(rows.length).padStart(4)} matched  ${String(correct).padStart(4)} correct  precision ${pct(correct, rows.length)}`,
     );
   }
+
+  // ---------------------------------------------------------------------
+  // The operating point is a decision, so it is made from a curve and stated.
+  //
+  // Every row carries the perturbation that produced it, so the gate can be swept after
+  // the fact without re-running anything. Raising the gate admits weaker evidence:
+  // coverage rises and precision falls. No setting maximises both, which is why the curve
+  // matters more than any single number taken from it.
+  // ---------------------------------------------------------------------
+  console.log(`\n  COVERAGE vs PRECISION SWEEP:`);
+  console.log(`    conf >=   matched   correct   precision   coverage   false`);
+  let chosen = -1;
+  for (const gate of [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9]) {
+    const admitted = matched.filter((s) => s.decision.confidence >= gate);
+    const correct = admitted.filter((s) => s.correctValueEquivalent).length;
+    const precision = admitted.length === 0 ? 0 : correct / admitted.length;
+    if (precision >= 0.95 && admitted.length > 0) chosen = gate;
+    console.log(
+      `    ${gate.toFixed(2)}      ${String(admitted.length).padStart(6)}   ${String(correct).padStart(7)}   ${pct(correct, admitted.length).padStart(9)}   ${pct(admitted.length, total).padStart(8)}   ${String(admitted.length - correct).padStart(5)}`,
+    );
+  }
+  console.log(
+    `\n    operating point: confidence >= ${chosen >= 0 ? chosen.toFixed(2) : "none reached"}, the widest gate holding precision at or above 95 percent.`,
+  );
+  console.log(
+    `    Chosen because a wrong auto match in reconciliation is unrecoverable and a review is merely expensive.`,
+  );
+
+  console.log(`\n  CALIBRATION (stated confidence against observed correctness):`);
+  const buckets = [
+    [0.0, 0.5],
+    [0.5, 0.6],
+    [0.6, 0.7],
+    [0.7, 0.8],
+    [0.8, 0.9],
+    [0.9, 1.01],
+  ] as const;
+  let ece = 0;
+  for (const [lo, hi] of buckets) {
+    const rows = matched.filter((s) => s.decision.confidence >= lo && s.decision.confidence < hi);
+    if (rows.length === 0) continue;
+    const correct = rows.filter((s) => s.correctValueEquivalent).length;
+    const observed = correct / rows.length;
+    const stated = rows.reduce((a, s) => a + s.decision.confidence, 0) / rows.length;
+    ece += (rows.length / matched.length) * Math.abs(observed - stated);
+    console.log(
+      `    stated ${stated.toFixed(2)}   observed ${observed.toFixed(2)}   n=${String(rows.length).padStart(3)}  ${"#".repeat(Math.round(observed * 20))}`,
+    );
+  }
+  console.log(`    expected calibration error: ${ece.toFixed(3)}   (0 is perfect)`);
 
   console.log(`\n  SECTION 6.1 CHECKPOINT`);
   const coverage = (matched.length / total) * 100;
