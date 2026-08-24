@@ -222,3 +222,112 @@ Auto matching everything the solver finds is what produced 73.4 percent. Auto ma
 only what the evidence supports is a different system, and the curve says where the line
 is. That is the work for days 6 and 7, and it is what tier 3 and the gate were always
 for.
+
+---
+
+## 2026-08-23, days 6, 7 and 8
+
+### The shape was the problem, not the tuning
+
+Days 4 and 5 ended at 16 percent coverage and 73.4 percent precision. Rather than tune,
+every one of the seventeen false matches was compared against what the true answer would
+have required:
+
+| finding | rows |
+|---|---|
+| solver chose a rival with **strictly lower** perturbation than the truth | 9 |
+| genuine tie: rival and truth needed identical perturbation | 3 |
+| true batch held a converted payment, so an exact tie was never available | 3 |
+| truth outside the search bounds, or an orphan | 2 |
+
+Nine rows lost to a rival that moved FEWER payments off cycle than reality did. Perturbation
+is a real signal, but on those rows it points the wrong way and nothing inside a single
+row's evidence can overrule it.
+
+The missing evidence was in other rows. A payment settles exactly once, and a batch day
+produces exactly one settlement. Row by row matching cannot see either constraint.
+
+Rewritten as constraint propagation, `ADR 0006`. Rows commit in rounds, strongest evidence
+first, committed payments and days leave the pool, and rows whose window touched a changed
+day are re-solved against what remains.
+
+### Faster and more accurate turned out to be the same change
+
+Search bounds came down from 5 removals to 3, on two measurements that agreed:
+
+- precision beyond perturbation 3 is worse than a coin flip, so searching there buys wrong
+  answers
+- at 5 the combinatorics did not finish 399 rows inside two minutes
+
+The expensive part and the inaccurate part were the same part.
+
+```
+                      before        after
+coverage               16.0%        22.3%
+precision              73.4%        83.1%
+false matches             17           15
+orphan credits caught  17/25        25/25
+throughput          5 rows/s     80 rows/s
+```
+
+Orphan detection reaching 25 of 25 is the result worth pointing at. A credit whose only
+candidate payments have been claimed elsewhere now has nowhere to hide.
+
+### A hypothesis that was wrong, and cheap to kill
+
+Before building any of it, the collision hypothesis was tested directly: were matched rows
+claiming each other's payments? **Only 3 of 17 false matches involved a collision.** Sixty
+percent of credits share a statement date with another, but at 16 percent coverage they
+rarely both matched.
+
+Mutual exclusion alone would have bought three rows. Worth knowing before writing it, and
+the reason the fix that shipped is the ladder rather than a single dedupe pass.
+
+Batch day exclusivity was added too and, measured on its own, changed nothing at all: the
+offset 0 errors are lower-perturbation wrong subsets on the CORRECT day, not day
+collisions. It is kept because it is a true constraint that will bind at other volumes,
+but it earned nothing here and saying so is more useful than implying it did.
+
+### The confidence number was lying
+
+ECE 0.176. One bucket stated 0.21 while observing 0.87. The system was least sure about
+rows it was getting right nearly nine times in ten, and a reviewer following it would have
+been sent to exactly the wrong rows.
+
+Replaced with a fitted table, `ADR 0007`: the measured precision of rows carrying the same
+evidence, fitted on dev only and from an UNGATED run, so the gate cannot chase its own
+output. **ECE 0.176 to 0.053.**
+
+Two things were tried and rejected inside that change. A pooled fallback below eight
+observations replaced a measured 0.60 with a pooled 0.82 and made calibration worse in the
+buckets that most needed honesty; Laplace smoothing does the same job without the cliff.
+And the first fit was run against gated output, which is circular, and produced a gate that
+admitted everything.
+
+### The gate, set from the curve rather than from taste
+
+```
+conf >=   matched   precision   coverage
+0.80           63       90.5%      15.8%
+0.85           29       96.6%       7.3%
+0.90           19       94.7%       4.8%
+```
+
+Operating point: **confidence >= 0.85**. Final dev figures at that gate: 28 auto matched,
+**96.4 percent precision, one false match**, with 272 rows offered for review.
+
+Coverage is deliberately low. A wrong auto match closes the book on money that never
+arrived and nobody looks again; a review costs a person a minute. The errors are not
+symmetric, so the gate is not at the midpoint.
+
+### Scale is not neutral
+
+A large split was added: three financial years, 1,471 scored bank rows over **51,193
+payments**, with failure class rates identical to dev by construction so that it measures
+scale rather than difficulty.
+
+It measures something else too. Interchangeable payments rise from 23 percent to **56.3
+percent** and the strict ceiling falls from 40 to **20.4**, because same day amount
+collisions scale superlinearly with daily volume. A denser business is a genuinely harder
+reconciliation, not merely a longer one, and any system reporting a flat accuracy across
+volumes is not measuring that.
