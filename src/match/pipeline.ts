@@ -66,8 +66,8 @@ export interface Decision {
   readonly alternatives: number;
   readonly perturbation: number;
   readonly dayOffset: number;
-  /** members of the answer that could have been a different, identical payment */
-  readonly interchangeable: number;
+  /** how far ahead of the next materially different answer this one is */
+  readonly margin: number;
   /** which propagation round committed this row. 0 means it never needed one */
   readonly round: number;
 }
@@ -290,7 +290,7 @@ function decideEarly(row: BankRow): Decision | null {
     alternatives: 0,
     perturbation: -1,
     dayOffset: 0,
-    interchangeable: 0,
+    margin: 0,
     round: 0,
   };
 
@@ -432,7 +432,7 @@ function commit(
     alternatives: 0,
     perturbation,
     dayOffset: dayGap(context.anchorDate, solution.batchDay),
-    interchangeable: solution.interchangeableMembers,
+    margin: solution.margin,
     round,
   };
 }
@@ -453,7 +453,7 @@ function finalise(context: RowContext, result: ReturnType<typeof solve>): Decisi
     settlementId: context.settlement?.id ?? null,
     perturbation: -1,
     dayOffset: 0,
-    interchangeable: 0,
+    margin: 0,
     round: 0,
   };
 
@@ -477,7 +477,7 @@ function finalise(context: RowContext, result: ReturnType<typeof solve>): Decisi
       alternatives: 1,
       perturbation: solution.removed + solution.added,
       dayOffset: dayGap(context.anchorDate, solution.batchDay),
-      interchangeable: solution.interchangeableMembers,
+      margin: solution.margin,
     };
   }
 
@@ -515,7 +515,7 @@ function confidenceOf(context: RowContext, solution: Solution, round: number): n
       perturbation: solution.removed + solution.added,
       settlementPresent: context.settlement !== null,
       firstRound: round <= 1,
-      interchangeable: solution.interchangeableMembers,
+      margin: solution.margin,
     },
     loadCalibration(),
   );

@@ -123,11 +123,19 @@ export interface Solution {
    */
   readonly batchDayHasConversion: boolean;
   /**
-   * Members that could have been a different payment.
+   * Members that could have come from a DIFFERENT DAY at the same amount.
    *
-   * A member drawn from a bucket that still held others is interchangeable: an
-   * amount identical payment captured the same day was left behind, and nothing in the
-   * sources says which of them belongs here.
+   * The first version of this counted members drawn from a bucket that still held others,
+   * and that was wrong in a way worth keeping on the record. A bucket is (day, amount), so
+   * swapping two identical payments captured the same day produces an identical canonical
+   * form: it is exactly the harmless ambiguity ADR 0005 exists to discard. The feature was
+   * measuring the ambiguity that does not matter, and at scale it refused everything,
+   * taking coverage on the large corpus to zero.
+   *
+   * The substitution that actually changes an answer is cross day. Taking three payments
+   * of 999 from Monday when the truth took two from Monday and one from Sunday is a
+   * different multiset of (day, amount), and therefore a different answer. So this counts
+   * members whose amount was ALSO available on another day in the candidate window.
    *
    * This exists because a confidence table fitted on the dev corpus did not transfer to a
    * four times denser one. Dev buckets measured at 90 percent precision scored 40 percent
@@ -139,6 +147,25 @@ export interface Solution {
    * corpus it came from, is what lets one fitted table hold across densities.
    */
   readonly interchangeableMembers: number;
+  /**
+   * How much better this answer is than the next materially different one.
+   *
+   * The perturbation of the runner up minus the perturbation of this solution, or a large
+   * number when no rival was found at all.
+   *
+   * THIS IS THE THIRD ATTEMPT AT AN AMBIGUITY FEATURE and the first that discriminates.
+   * The first counted members drawn from a bucket that still held others; a bucket is
+   * (day, amount), so it counted same day swaps, which produce an identical canonical form
+   * and are exactly what ADR 0005 discards. The second counted members whose amount was
+   * available on another day; with eleven catalogue prices across six days that is nearly
+   * every payment, so it collapsed to a constant.
+   *
+   * Both measured whether an alternative EXISTED. What predicts an error is whether an
+   * alternative was COMPETITIVE. A batch explained by moving one payment off cycle, whose
+   * nearest rival needs four, is a confident answer. The same batch, with a rival needing
+   * two, is a coin flip wearing the same evidence.
+   */
+  readonly margin: number;
 }
 
 export interface SolveResult {
@@ -239,17 +266,45 @@ function materialise(buckets: readonly Bucket[], counts: Counts): ValuedPayment[
 }
 
 /**
- * Members taken from a bucket that still held others. Each is a coin flip the sources do
- * not decide, so each is a reason to trust the answer less.
+ * Members whose amount was also available on another day in the candidate window.
+ *
+ * These are the coin flips that change the answer. A member taken from (Monday, 999) when
+ * (Sunday, 999) also had stock could have come from either, and the two produce different
+ * canonical forms, so nothing in the sources decides between them.
+ *
+ * Same day duplicates are deliberately NOT counted. Swapping two identical payments
+ * captured on one day leaves the canonical form untouched, which is the whole point of
+ * ADR 0005, and counting them made the system refuse answers that were correct.
  */
-function countInterchangeable(buckets: readonly Bucket[], counts: Counts): number {
+function countCrossDaySubstitutable(
+  baseBuckets: readonly Bucket[],
+  baseCounts: Counts,
+  addBuckets: readonly Bucket[],
+  addCounts: Counts,
+): number {
+  // which days can supply each amount at all
+  const daysByAmount = new Map<string, Set<string>>();
+  const note = (bucket: Bucket): void => {
+    if (bucket.members.length === 0) return;
+    const key = bucket.minor.toString();
+    const days = daysByAmount.get(key);
+    if (days) days.add(bucket.day);
+    else daysByAmount.set(key, new Set([bucket.day]));
+  };
+  for (const bucket of baseBuckets) note(bucket);
+  for (const bucket of addBuckets) note(bucket);
+
   let total = 0;
-  for (let i = 0; i < counts.length; i++) {
-    const taken = counts[i] as number;
-    if (taken <= 0) continue;
-    const stock = (buckets[i] as Bucket).members.length;
-    if (stock > taken) total += taken;
-  }
+  const tally = (buckets: readonly Bucket[], counts: Counts): void => {
+    for (let i = 0; i < counts.length; i++) {
+      const taken = counts[i] as number;
+      if (taken <= 0) continue;
+      const bucket = buckets[i] as Bucket;
+      if ((daysByAmount.get(bucket.minor.toString())?.size ?? 1) > 1) total += taken;
+    }
+  };
+  tally(baseBuckets, baseCounts);
+  tally(addBuckets, addCounts);
   return total;
 }
 
@@ -601,6 +656,9 @@ export function solve(
   // is genuine ambiguity and goes to review.
   let bestPerturbation = Number.POSITIVE_INFINITY;
   let daysTried = 0;
+  // every distinct answer seen at any perturbation, so the runner up survives to be
+  // compared against. The winner alone cannot tell you how close the race was.
+  const allSeen = new Map<string, number>();
 
   for (const batchDay of candidateDays) {
     if (cache.claimedDays.has(batchDay)) continue;
@@ -615,7 +673,7 @@ export function solve(
     const baseGross = base.reduce((acc, m) => acc + m.gross.minor, 0n);
 
     for (let removeTotal = 0; removeTotal <= options.maxRemove; removeTotal++) {
-      if (removeTotal > bestPerturbation) break;
+      if (removeTotal > bestPerturbation + 2) break;
 
       const removals =
         removeTotal === 0
@@ -647,12 +705,19 @@ export function solve(
         for (const addCounts of additions) {
           const addedTotal = addCounts.reduce((a, b) => a + b, 0);
           const perturbation = removeTotal + addedTotal;
-          if (perturbation > bestPerturbation) continue;
+          // a rival one step worse is still recorded, because the margin needs it
+          if (perturbation > bestPerturbation + 2) continue;
 
           const added = materialise(addBuckets, addCounts);
           const members = [...kept, ...added];
           if (members.length === 0) continue;
           if (!verify(mode, members, currency)) continue;
+
+          const seenKey = `${countsKey(baseBuckets, keptCounts)}
+--
+${countsKey(addBuckets, addCounts)}`;
+          const priorSeen = allSeen.get(seenKey);
+          if (priorSeen === undefined || perturbation < priorSeen) allSeen.set(seenKey, perturbation);
 
           if (perturbation < bestPerturbation) {
             bestPerturbation = perturbation;
@@ -665,10 +730,14 @@ export function solve(
               batchDay,
               removed: removeTotal,
               added: addedTotal,
+              margin: 0,
               approximateMembers: members.filter((m) => m.approximate).length,
-              interchangeableMembers:
-                countInterchangeable(baseBuckets, keptCounts) +
-                countInterchangeable(addBuckets, addCounts),
+              interchangeableMembers: countCrossDaySubstitutable(
+                baseBuckets,
+                keptCounts,
+                addBuckets,
+                addCounts,
+              ),
               batchDayHasConversion: (cache.byDay.get(batchDay) ?? []).some((m) => m.approximate),
             });
           }
@@ -679,7 +748,12 @@ export function solve(
     }
   }
 
-  const solutions = [...byCanonical.values()];
+  const runnerUp = [...allSeen.values()]
+    .filter((p) => p > bestPerturbation)
+    .reduce((min, p) => (p < min ? p : min), Number.POSITIVE_INFINITY);
+  const margin = Number.isFinite(runnerUp) ? runnerUp - bestPerturbation : 99;
+
+  const solutions = [...byCanonical.values()].map((solution) => ({ ...solution, margin }));
   return {
     kind: solutions.length === 1 ? "unique" : solutions.length === 0 ? "none" : "ambiguous",
     solutions,

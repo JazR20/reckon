@@ -79,7 +79,7 @@ for (const SPLIT of SPLITS) {
         perturbation: decision.perturbation,
         settlementPresent: decision.settlementId !== null,
         firstRound: decision.round <= 1,
-        interchangeable: decision.interchangeable,
+        margin: decision.margin,
       },
       correct: canonicalForm(facts(decision.paymentIds)) === canonicalForm(facts(entry.paymentIds)),
     });

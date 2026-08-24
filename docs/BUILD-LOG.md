@@ -382,3 +382,45 @@ Batch day exclusivity, added in the same session, was measured on its own and **
 nothing**. The offset 0 errors are lower perturbation wrong subsets on the correct day, not
 day collisions. It is kept because it is a true constraint that will bind at other volumes,
 and recorded as having earned nothing here rather than left to imply otherwise.
+
+### Third attempt at the ambiguity feature, and the pattern behind the first two
+
+The margin between the winning answer and the next materially different one. It
+discriminates, monotonically, in every family:
+
+```
+evidence      margin 0   margin 1   margin >=3
+p0 s1 r1        0.67       0.80       0.88
+p1 s1 r0        0.33       0.60       0.76
+p2 s1 r0        0.17       0.29       0.38
+```
+
+Same perturbation, same reference quality, same round. The only thing that changes is how
+close the runner up was, and precision moves with it every time.
+
+**Both earlier attempts made the same mistake.** Each measured whether an alternative
+EXISTED. What predicts an error is whether an alternative was COMPETITIVE. A batch
+explained by moving one payment off cycle, whose nearest rival needs four, is a confident
+answer. The same batch with a rival needing two is a coin flip wearing identical evidence.
+
+Worth naming rather than letting three attempts read as steady progress: **twice a feature
+was implemented before checking whether its value varied across the corpus.** A histogram
+would have taken two minutes and killed both before a line was written. The solver had been
+computing the runner up all along and discarding it.
+
+Dev at the 0.85 gate with the margin feature:
+
+```
+MATCHED  20 (5.0%)   precision 95.0%   false matches 1
+strict set accuracy  95.0%             ECE 0.074
+84 rows/sec
+```
+
+Strict accuracy equals value equivalent accuracy here, which is worth noting: at this gate
+the system only commits to answers where identity is not in question, so the two rules
+agree.
+
+ECE rose from 0.043 to 0.074. The finer feature set spreads 153 observations across
+sixteen buckets and several hold fewer than five, so the estimates are noisier even though
+the ordering is right. More corpora, not a coarser model, is the fix, and it is not
+attempted before the deadline.
